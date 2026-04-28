@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* Simple, always-light chat palette (WhatsApp-ish) */
+    --app-bg: #f5f6f7;
+    --chat-bg: #efeae2;
+    --chat-bg-dot: rgba(0, 0, 0, 0.04);
+    --bubble-me: #d9fdd3;
+    --bubble-other: #ffffff;
+    --text-muted: #667085;
+    --divider: rgba(0, 0, 0, 0.08);
+  }
+
+  body {
+    @apply antialiased;
+    background: var(--app-bg);
+    color: #0f172a;
+  }
+}

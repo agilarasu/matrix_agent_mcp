@@ -1,0 +1,8 @@
+__pycache__/
+ui/node_modules/
+mcp/.venv/
+agent/.venv/
+
+.env
+
+.cursor/

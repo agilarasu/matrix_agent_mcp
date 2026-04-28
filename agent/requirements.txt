@@ -1,0 +1,6 @@
+matrix-nio[e2e]
+groq
+python-dotenv
+httpx
+mcp
+
