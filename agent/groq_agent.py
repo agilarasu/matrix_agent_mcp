@@ -54,12 +54,12 @@ class GroqChatAgent:
       {
         "type": "function",
         "function": {
-          "name": "simulate_task",
-          "description": "Call MCP demo tool simulate_task(input) and return its JSON output.",
+          "name": "fetch_url",
+          "description": "Fetch a URL and return its text content (HTML stripped). Use when user shares a link or asks about a webpage.",
           "parameters": {
             "type": "object",
-            "properties": {"input": {"type": "string"}},
-            "required": ["input"],
+            "properties": {"url": {"type": "string", "description": "Full http/https URL to fetch."}},
+            "required": ["url"],
           },
         },
       },
@@ -67,10 +67,11 @@ class GroqChatAgent:
 
   def _system_prompt(self) -> str:
     return (
-      "You are AI assistant in Matrix room. "
-      "If you need user choice, call trigger_choice_selector with clear prompt and options. "
-      "When choice selector shown, user cannot type; do not ask for typed input until choice result comes back. "
-      "Keep replies short."
+      "You are an AI assistant in a Matrix chat room. "
+      "When a user shares a URL or asks about a webpage, call fetch_url to retrieve its content, then summarize. "
+      "If you need the user to pick between options, call trigger_choice_selector — never ask for a typed choice when a selector fits. "
+      "While a choice selector is shown, the user cannot type; wait for the result before continuing. "
+      "Keep replies concise."
     )
 
   def build_messages(self, room_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -87,14 +88,13 @@ class GroqChatAgent:
         )
     return msgs
 
-  async def _call_mcp_simulate_task(self, input_text: str) -> dict[str, Any]:
+  async def _call_mcp_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     async with streamable_http_client(self.mcp_server_url) as (read_stream, write_stream, _):
       async with ClientSession(read_stream, write_stream) as session:
         await session.initialize()
-        result = await session.call_tool("simulate_task", arguments={"input": input_text})
+        result = await session.call_tool(tool_name, arguments=arguments)
         if result.structuredContent:
           return dict(result.structuredContent)
-        # fallback to text content
         blocks = []
         for c in result.content:
           if isinstance(c, types.TextContent):
@@ -160,8 +160,8 @@ class GroqChatAgent:
             "messages": messages,
           }
 
-        if name == "simulate_task":
-          out = await self._call_mcp_simulate_task(args["input"])
+        if name == "fetch_url":
+          out = await self._call_mcp_tool("fetch_url", {"url": args["url"]})
           messages.append(
             {
               "role": "tool",
