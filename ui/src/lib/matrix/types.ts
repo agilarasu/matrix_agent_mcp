@@ -14,6 +14,14 @@ export type ChoiceResultEventContent = {
   submitted_by: string;
 };
 
+export type ToolCallEventContent = {
+  tool_call_id?: string;
+  tool_name?: string;
+  arguments?: Record<string, unknown>;
+  source?: "agent" | string;
+};
+
 export const MATRIX_EVENT_CHOICE_SELECTOR = "com.poc.choice_selector";
 export const MATRIX_EVENT_CHOICE_RESULT = "com.poc.choice_result";
+export const MATRIX_EVENT_TOOL_CALL = "com.poc.tool_call";
 

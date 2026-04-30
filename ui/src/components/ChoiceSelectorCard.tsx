@@ -41,7 +41,7 @@ export function ChoiceSelectorCard(props: {
   }
 
   return (
-    <Card className={cn("border-violet-200 bg-violet-50/60", readOnly && "opacity-60")}>
+    <Card className={cn("w-full border-violet-200 bg-violet-50/60 text-left", readOnly && "opacity-60")}>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">{readOnly ? "Choice submitted" : "Choice needed"}</CardTitle>
       </CardHeader>

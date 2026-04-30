@@ -78,6 +78,7 @@ Optional `ui/.env`:
 
 ```bash
 VITE_MATRIX_HOMESERVER_URL=http://localhost:8008
+VITE_DEFAULT_INVITE_BOT_MXID=@agil_ai_bot:matrix.org
 ```
 
 Run:
@@ -90,7 +91,7 @@ npm run dev
 
 Flow:
 - login (password login)
-- pick room or create private room (invite bot mxid)
+- pick room or create private room (bot is auto-invited)
 - chat
 
 ---

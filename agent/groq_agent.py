@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal
 
 from groq import Groq
 from mcp import ClientSession, types
@@ -25,6 +25,7 @@ class GroqChatAgent:
     self.model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     self.context_limit = int(os.environ.get("CONTEXT_MESSAGE_LIMIT", "20"))
     self.mcp_server_url = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp").rstrip("/")
+    self.on_tool_call: Callable[[dict[str, Any]], Awaitable[None]] | None = None
 
   def _tool_defs(self) -> list[dict[str, Any]]:
     return [
@@ -148,6 +149,15 @@ class GroqChatAgent:
       for tc in tool_calls:
         name = tc["function"]["name"]
         args = json.loads(tc["function"]["arguments"] or "{}")
+        if self.on_tool_call is not None:
+          await self.on_tool_call(
+            {
+              "tool_call_id": tc.get("id"),
+              "tool_name": name,
+              "arguments": args,
+              "source": "agent",
+            }
+          )
 
         if name == "trigger_choice_selector":
           request_id = str(uuid.uuid4())

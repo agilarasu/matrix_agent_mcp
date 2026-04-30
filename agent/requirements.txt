@@ -1,4 +1,4 @@
-matrix-nio[e2e]
+matrix-nio
 groq
 python-dotenv
 httpx

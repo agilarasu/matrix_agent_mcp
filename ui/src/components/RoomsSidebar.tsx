@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Trash2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
@@ -12,9 +13,10 @@ export function RoomsSidebar(props: { selectedRoomId?: string | null }) {
   const [roomsVersion, setRoomsVersion] = React.useState(0);
 
   const [creating, setCreating] = React.useState(false);
+  const [deletingRoomId, setDeletingRoomId] = React.useState<string | null>(null);
   const [newRoomName, setNewRoomName] = React.useState("");
-  const [inviteBotMxid, setInviteBotMxid] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const inviteBotMxid = (import.meta.env.VITE_DEFAULT_INVITE_BOT_MXID as string | undefined)?.trim() || "@agil_ai_bot:matrix.org";
 
   React.useEffect(() => {
     if (!client) return;
@@ -45,15 +47,36 @@ export function RoomsSidebar(props: { selectedRoomId?: string | null }) {
         visibility: "private" as any,
         preset: "private_chat" as any,
         name: newRoomName || undefined,
-        invite: inviteBotMxid ? [inviteBotMxid] : undefined,
+        invite: [inviteBotMxid],
       });
       setNewRoomName("");
-      setInviteBotMxid("");
       navigate(`/room/${encodeURIComponent(res.room_id)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create room failed");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function deleteRoom(roomId: string) {
+    if (!client) return;
+    setError(null);
+    setDeletingRoomId(roomId);
+    try {
+      await client.leave(roomId);
+      try {
+        await client.forget(roomId, true);
+      } catch {
+        // Some homeservers may reject forget immediately; leaving is enough to hide from active chats.
+      }
+      setRoomsVersion((v) => v + 1);
+      if (selectedRoomId === roomId) {
+        navigate("/");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete chat failed");
+    } finally {
+      setDeletingRoomId(null);
     }
   }
 
@@ -81,26 +104,38 @@ export function RoomsSidebar(props: { selectedRoomId?: string | null }) {
           ) : (
             rooms.map((r) => {
               const selected = selectedRoomId && r.roomId === selectedRoomId;
+              const deleting = deletingRoomId === r.roomId;
               return (
-                <button
+                <div
                   key={r.roomId}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"
+                  className="flex items-center gap-2 px-2"
                   style={{ background: selected ? "rgba(37, 211, 102, 0.12)" : undefined }}
-                  onClick={() => navigate(`/room/${encodeURIComponent(r.roomId)}`)}
                 >
-                  <div
-                    className="grid h-10 w-10 place-items-center rounded-full text-sm font-semibold"
-                    style={{ background: "#eef2ff", color: "#3730a3" }}
+                  <button
+                    className="flex min-w-0 flex-1 items-center gap-3 px-2 py-3 text-left hover:bg-slate-50"
+                    onClick={() => navigate(`/room/${encodeURIComponent(r.roomId)}`)}
                   >
-                    {roomInitial(r.name || r.roomId)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">{r.name || r.roomId}</div>
-                    <div className="truncate text-xs" style={{ color: "var(--text-muted)" }}>
-                      {r.roomId}
+                    <div
+                      className="grid h-10 w-10 place-items-center rounded-full text-sm font-semibold"
+                      style={{ background: "#eef2ff", color: "#3730a3" }}
+                    >
+                      {roomInitial(r.name || r.roomId)}
                     </div>
-                  </div>
-                </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{r.name || "Unnamed chat"}</div>
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                    onClick={() => void deleteRoom(r.roomId)}
+                    disabled={!client || clientState !== "ready" || deleting}
+                    title="Delete chat"
+                    aria-label="Delete chat"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               );
             })
           )}
@@ -116,13 +151,7 @@ export function RoomsSidebar(props: { selectedRoomId?: string | null }) {
             className="h-10 rounded-full bg-slate-50 px-4"
             value={newRoomName}
             onChange={(e) => setNewRoomName(e.target.value)}
-            placeholder="Chat name"
-          />
-          <Input
-            className="h-10 rounded-full bg-slate-50 px-4"
-            value={inviteBotMxid}
-            onChange={(e) => setInviteBotMxid(e.target.value)}
-            placeholder="Invite bot mxid (optional)"
+            placeholder="Chat name (optional)"
           />
           {error ? (
             <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">

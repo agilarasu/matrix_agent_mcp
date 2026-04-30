@@ -2,7 +2,6 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useMatrix } from "@/lib/matrix/MatrixProvider";
 
@@ -13,8 +12,8 @@ export function RoomsPage() {
 
   const [creating, setCreating] = React.useState(false);
   const [newRoomName, setNewRoomName] = React.useState("");
-  const [inviteBotMxid, setInviteBotMxid] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
+  const inviteBotMxid = (import.meta.env.VITE_DEFAULT_INVITE_BOT_MXID as string | undefined)?.trim() || "@agil_ai_bot:matrix.org";
 
   React.useEffect(() => {
     if (!client) return;
@@ -45,7 +44,7 @@ export function RoomsPage() {
         visibility: "private" as any,
         preset: "private_chat" as any,
         name: newRoomName || undefined,
-        invite: inviteBotMxid ? [inviteBotMxid] : undefined,
+        invite: [inviteBotMxid],
       });
       navigate(`/room/${encodeURIComponent(res.room_id)}`);
     } catch (err) {
@@ -109,10 +108,7 @@ export function RoomsPage() {
                   {roomInitial(r.name || r.roomId)}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{r.name || r.roomId}</div>
-                  <div className="truncate text-xs" style={{ color: "var(--text-muted)" }}>
-                    {r.roomId}
-                  </div>
+                  <div className="truncate text-sm font-medium">{r.name || "Unnamed chat"}</div>
                 </div>
                 <div className="shrink-0 text-xs" style={{ color: "var(--text-muted)" }}>
                   {r.getMyMembership() ?? ""}
@@ -127,7 +123,7 @@ export function RoomsPage() {
         <div className="mb-3">
           <div className="text-sm font-semibold">New chat</div>
           <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-            Create private room. Optional: invite bot.
+            Create private room. Bot invite is always enabled.
           </div>
         </div>
         <div className="space-y-3">
@@ -139,18 +135,7 @@ export function RoomsPage() {
               className="h-11 rounded-full bg-slate-50 px-4"
               value={newRoomName}
               onChange={(e) => setNewRoomName(e.target.value)}
-              placeholder="Chat name"
-            />
-          </div>
-          <div className="space-y-1">
-            <div className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              Invite bot mxid
-            </div>
-            <Input
-              className="h-11 rounded-full bg-slate-50 px-4"
-              value={inviteBotMxid}
-              onChange={(e) => setInviteBotMxid(e.target.value)}
-              placeholder="@bot:example.org"
+              placeholder="Chat name (optional)"
             />
           </div>
           {error ? (
