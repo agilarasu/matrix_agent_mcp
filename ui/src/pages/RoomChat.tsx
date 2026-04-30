@@ -8,13 +8,16 @@ import { useParams } from "react-router-dom";
 import { ChoiceSelectorCard } from "@/components/ChoiceSelectorCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useMatrix } from "@/lib/matrix/MatrixProvider";
 import {
   MATRIX_EVENT_CHOICE_RESULT,
   MATRIX_EVENT_CHOICE_SELECTOR,
+  MATRIX_EVENT_TASK_FORM_SUBMIT,
   MATRIX_EVENT_TOOL_CALL,
   type ChoiceResultEventContent,
   type ChoiceSelectorEventContent,
+  type TaskFormSubmitEventContent,
   type ToolCallEventContent,
 } from "@/lib/matrix/types";
 import { cn } from "@/lib/utils";
@@ -23,6 +26,7 @@ type RenderableEvent =
   | { kind: "text"; event: MatrixEvent; body: string }
   | { kind: "choice_selector"; event: MatrixEvent; content: ChoiceSelectorEventContent }
   | { kind: "choice_result"; event: MatrixEvent; content: ChoiceResultEventContent }
+  | { kind: "task_form_submit"; event: MatrixEvent; content: TaskFormSubmitEventContent }
   | { kind: "tool_call"; event: MatrixEvent; content: ToolCallEventContent };
 
 function eventSender(event: MatrixEvent): string {
@@ -50,6 +54,21 @@ function toRenderable(ev: MatrixEvent): RenderableEvent | null {
     const c = ev.getContent() as ChoiceResultEventContent;
     if (!c?.request_id || !Array.isArray(c?.selected_option_ids) || !c?.submitted_by) return null;
     return { kind: "choice_result", event: ev, content: c };
+  }
+  if (type === MATRIX_EVENT_TASK_FORM_SUBMIT) {
+    const c = ev.getContent() as TaskFormSubmitEventContent;
+    if (
+      !c?.file_id ||
+      typeof c?.priority !== "string" ||
+      typeof c?.assigned_to !== "string" ||
+      typeof c?.note !== "string" ||
+      typeof c?.confirmed !== "boolean" ||
+      typeof c?.cancelled !== "boolean" ||
+      !c?.submitted_by
+    ) {
+      return null;
+    }
+    return { kind: "task_form_submit", event: ev, content: c };
   }
   if (type === MATRIX_EVENT_TOOL_CALL) {
     const c = ev.getContent() as ToolCallEventContent;
@@ -87,6 +106,11 @@ export function RoomChatPage() {
   const [sendBusy, setSendBusy] = React.useState(false);
   const [typingTick, setTypingTick] = React.useState(0);
   const [roomTick, setRoomTick] = React.useState(0);
+  const [taskFormBusy, setTaskFormBusy] = React.useState(false);
+  const [taskFormFileId, setTaskFormFileId] = React.useState("");
+  const [taskFormPriority, setTaskFormPriority] = React.useState("");
+  const [taskFormAssignedTo, setTaskFormAssignedTo] = React.useState("");
+  const [taskFormNote, setTaskFormNote] = React.useState("");
   const scrollerRef = React.useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = React.useRef(true);
 
@@ -177,8 +201,6 @@ export function RoomChatPage() {
     [renderable, session?.userId]
   );
 
-  const composerDisabled = clientState !== "ready" || !client || !roomId || Boolean(pendingRequestId);
-
   const room = client && roomId ? client.getRoom(roomId) : null;
   const typingUsers = React.useMemo(() => {
     if (!room || !session?.userId) return [];
@@ -215,6 +237,26 @@ export function RoomChatPage() {
     await client.sendEvent(roomId, MATRIX_EVENT_CHOICE_RESULT as any, content as any);
   }
 
+  async function submitTaskForm(cancelled: boolean) {
+    if (!client || !roomId || !session?.userId) return;
+    if (!cancelled && !taskFormPriority.trim()) return;
+    const content: TaskFormSubmitEventContent = {
+      file_id: taskFormFileId.trim(),
+      priority: taskFormPriority.trim().toLowerCase(),
+      assigned_to: taskFormAssignedTo.trim(),
+      note: taskFormNote.trim(),
+      confirmed: !cancelled,
+      cancelled,
+      submitted_by: session.userId,
+    };
+    setTaskFormBusy(true);
+    try {
+      await client.sendEvent(roomId, MATRIX_EVENT_TASK_FORM_SUBMIT as any, content as any);
+    } finally {
+      setTaskFormBusy(false);
+    }
+  }
+
   const activeChoice = React.useMemo(() => {
     const latest = [...renderable]
       .filter((e) => e.kind === "choice_selector")
@@ -223,6 +265,42 @@ export function RoomChatPage() {
     if (pendingRequestId && latest.content.request_id === pendingRequestId) return latest;
     return null;
   }, [renderable, pendingRequestId]);
+
+  const activeTaskDraft = React.useMemo(() => {
+    const latest = [...renderable]
+      .filter((e) => e.kind === "tool_call" && e.content.tool_name === "add_task_to_a_file")
+      .slice(-1)[0] as Extract<RenderableEvent, { kind: "tool_call" }> | undefined;
+    if (!latest) return null;
+    const confirmed = Boolean(latest.content.arguments?.confirmed);
+    if (confirmed) return null;
+    const latestSubmit = [...renderable]
+      .filter((e) => e.kind === "task_form_submit")
+      .slice(-1)[0] as Extract<RenderableEvent, { kind: "task_form_submit" }> | undefined;
+    if (latestSubmit && eventTs(latestSubmit.event) >= eventTs(latest.event)) return null;
+    return latest;
+  }, [renderable]);
+
+  const composerDisabled =
+    clientState !== "ready" || !client || !roomId || Boolean(pendingRequestId) || Boolean(activeTaskDraft);
+
+  const draftOutcomeByEventId = React.useMemo(() => {
+    const map = new Map<string, { cancelled: boolean; submitted_by: string }>();
+    let lastDraftId: string | null = null;
+    for (const e of renderable) {
+      if (e.kind === "tool_call" && e.content.tool_name === "add_task_to_a_file") {
+        const confirmed = Boolean(e.content.arguments?.confirmed);
+        if (!confirmed) {
+          lastDraftId = e.event.getId?.() ?? `${eventTs(e.event)}:${eventSender(e.event)}`;
+        }
+        continue;
+      }
+      if (e.kind === "task_form_submit" && lastDraftId) {
+        map.set(lastDraftId, { cancelled: e.content.cancelled, submitted_by: e.content.submitted_by });
+        lastDraftId = null;
+      }
+    }
+    return map;
+  }, [renderable]);
 
   const myChoiceResultsByRequestId = React.useMemo(() => {
     const map = new Map<string, string[]>();
@@ -234,6 +312,15 @@ export function RoomChatPage() {
     }
     return map;
   }, [renderable, session?.userId]);
+
+  React.useEffect(() => {
+    if (!activeTaskDraft) return;
+    const args = activeTaskDraft.content.arguments ?? {};
+    setTaskFormFileId(typeof args.file_id === "string" ? args.file_id : "");
+    setTaskFormPriority(typeof args.priority === "string" ? args.priority : "");
+    setTaskFormAssignedTo(typeof args.assigned_to === "string" ? args.assigned_to : "");
+    setTaskFormNote(typeof args.note === "string" ? args.note : "");
+  }, [activeTaskDraft?.event.getId()]);
 
   React.useEffect(() => {
     const el = scrollerRef.current;
@@ -281,53 +368,176 @@ export function RoomChatPage() {
               // shown via corresponding selector card (read-only) to avoid duplicate bubbles
               return null;
             }
+            if (e.kind === "task_form_submit") {
+              return null;
+            }
 
             if (e.kind === "tool_call") {
               const toolName = e.content.tool_name || "tool";
               const argsText = e.content.arguments ? JSON.stringify(e.content.arguments) : "";
               if (toolName === "trigger_choice_selector") return null;
 
-              if (toolName === "fetch_url") {
-                const rawUrl = typeof e.content.arguments?.url === "string" ? e.content.arguments.url : "";
-                let hostname = "";
-                try {
-                  hostname = rawUrl ? new URL(rawUrl).hostname : "";
-                } catch {
-                  hostname = "";
-                }
-
-                const faviconUrl = hostname
-                  ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`
-                  : "";
-
+              if (toolName === "search_files") {
+                const query =
+                  typeof e.content.arguments?.query === "string" ? e.content.arguments.query.trim() : "";
                 return (
                   <div
                     key={e.event.getId() ?? `${eventTs(e.event)}:${sender}`}
                     className="w-full max-w-[85%] rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs"
                     style={{ color: "var(--text-muted)" }}
                   >
-                    <div className="mb-2 font-medium text-slate-600">Fetched URL</div>
-                    {rawUrl ? (
-                      <a
-                        href={rawUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 hover:bg-slate-100"
-                      >
-                        {faviconUrl ? (
-                          <img
-                            src={faviconUrl}
-                            alt=""
-                            width={16}
-                            height={16}
-                            className="h-4 w-4 shrink-0 rounded-sm"
-                          />
-                        ) : null}
-                        <span className="truncate">{rawUrl}</span>
-                      </a>
-                    ) : (
-                      <div className="text-slate-500">No URL provided</div>
+                    <div className="mb-1 font-medium text-slate-600">Searching legal files</div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700">
+                      {query ? (
+                        <>
+                          Query: <span className="font-medium">{query}</span>
+                        </>
+                      ) : (
+                        "Query: (empty)"
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (toolName === "add_task_to_a_file") {
+                const eventId = e.event.getId() ?? `${eventTs(e.event)}:${sender}`;
+                const fileId =
+                  typeof e.content.arguments?.file_id === "string" ? e.content.arguments.file_id : "";
+                const priority =
+                  typeof e.content.arguments?.priority === "string" ? e.content.arguments.priority : "";
+                const assignedTo =
+                  typeof e.content.arguments?.assigned_to === "string"
+                    ? e.content.arguments.assigned_to
+                    : "";
+                const note = typeof e.content.arguments?.note === "string" ? e.content.arguments.note : "";
+                const confirmed = Boolean(e.content.arguments?.confirmed);
+                const activeDraftId = activeTaskDraft
+                  ? activeTaskDraft.event.getId() ??
+                    `${eventTs(activeTaskDraft.event)}:${eventSender(activeTaskDraft.event)}`
+                  : "";
+                const isActiveDraft = !confirmed && activeDraftId === eventId;
+                const draftOutcome = !confirmed ? draftOutcomeByEventId.get(eventId) ?? null : null;
+                const isReadOnlyDraft = !confirmed && !isActiveDraft && Boolean(draftOutcome);
+
+                if (!confirmed && isActiveDraft) {
+                  return (
+                    <div
+                      key={eventId}
+                      className="w-full max-w-[85%] rounded-xl border border-slate-200 bg-white p-3 text-xs"
+                    >
+                      <div className="mb-2 text-xs font-medium text-slate-700">Task details</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Input value={taskFormFileId} disabled className="font-mono text-xs" />
+                        <select
+                          value={taskFormPriority}
+                          onChange={(ev) => setTaskFormPriority(ev.target.value)}
+                          className="border-input focus-visible:border-ring focus-visible:ring-ring/50 h-10 rounded-md border bg-transparent px-3 text-sm outline-none focus-visible:ring-[3px]"
+                          disabled={taskFormBusy}
+                        >
+                          <option value="">Select priority</option>
+                          <option value="low">Low</option>
+                          <option value="medium">Medium</option>
+                          <option value="high">High</option>
+                          <option value="urgent">Urgent</option>
+                        </select>
+                      </div>
+                      <div className="mt-2 space-y-2">
+                        <Input
+                          value={taskFormAssignedTo}
+                          onChange={(ev) => setTaskFormAssignedTo(ev.target.value)}
+                          placeholder="Assigned to"
+                          disabled={taskFormBusy}
+                        />
+                        <Textarea
+                          value={taskFormNote}
+                          onChange={(ev) => setTaskFormNote(ev.target.value)}
+                          placeholder="Task note"
+                          rows={3}
+                          disabled={taskFormBusy}
+                        />
+                      </div>
+                      <div className="mt-3 flex items-center justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => void submitTaskForm(true)}
+                          disabled={taskFormBusy}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={() => void submitTaskForm(false)}
+                          disabled={taskFormBusy || taskFormPriority.trim().length === 0}
+                        >
+                          {taskFormBusy ? "Submitting..." : "Confirm Create"}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (!confirmed && isReadOnlyDraft) {
+                  const statusText = draftOutcome?.cancelled ? "Cancelled" : "Submitted";
+                  return (
+                    <div
+                      key={eventId}
+                      className="w-full max-w-[85%] rounded-xl border border-slate-200 bg-white p-3 text-xs opacity-60"
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-slate-700">Task details</div>
+                        <div className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                          {statusText}
+                        </div>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Input value={fileId} disabled className="font-mono text-xs" />
+                        <Input value={priority} disabled className="text-xs" placeholder="priority" />
+                      </div>
+                      <Input value={assignedTo} disabled className="mt-2 text-xs" placeholder="assigned to" />
+                      <Textarea value={note} disabled className="mt-2 text-xs" rows={3} />
+                    </div>
+                  );
+                }
+
+                if (!confirmed) {
+                  // Draft without outcome yet (should be active). Keep visible but disabled defensively.
+                  return (
+                    <div
+                      key={eventId}
+                      className="w-full max-w-[85%] rounded-xl border border-slate-200 bg-white p-3 text-xs opacity-60"
+                    >
+                      <div className="mb-2 text-xs font-medium text-slate-700">Task details</div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <Input value={fileId} disabled className="font-mono text-xs" />
+                        <Input value={priority} disabled className="text-xs" placeholder="priority" />
+                      </div>
+                      <Input value={assignedTo} disabled className="mt-2 text-xs" placeholder="assigned to" />
+                      <Textarea value={note} disabled className="mt-2 text-xs" rows={3} />
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={eventId}
+                    className={cn(
+                      "w-full max-w-[85%] rounded-xl border p-3 text-xs",
+                      confirmed
+                        ? "border-emerald-300 bg-emerald-50"
+                        : "border-amber-300 bg-amber-50"
                     )}
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-medium text-emerald-800">Task created</div>
+                      <div className="rounded-full border border-emerald-200 bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                        Saved
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs text-emerald-800">
+                      {assignedTo ? `Assigned to ${assignedTo}` : "Assigned"}
+                      {priority ? ` • Priority ${priority}` : ""}
+                    </div>
                   </div>
                 );
               }

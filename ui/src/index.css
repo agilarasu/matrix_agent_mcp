@@ -6,14 +6,14 @@
   :root {
     color-scheme: light;
 
-    /* Simple, always-light chat palette (WhatsApp-ish) */
-    --app-bg: #f5f6f7;
-    --chat-bg: #efeae2;
-    --chat-bg-dot: rgba(0, 0, 0, 0.04);
-    --bubble-me: #d9fdd3;
+    /* Simple, always-light chat palette (neutral + cool accent) */
+    --app-bg: #f8fafc; /* slate-50 */
+    --chat-bg: #f3f4f6; /* gray-100 */
+    --chat-bg-dot: rgba(2, 6, 23, 0.035); /* slate-950 @ low alpha */
+    --bubble-me: #dbeafe; /* blue-100 */
     --bubble-other: #ffffff;
-    --text-muted: #667085;
-    --divider: rgba(0, 0, 0, 0.08);
+    --text-muted: #475569; /* slate-600 */
+    --divider: rgba(2, 6, 23, 0.08);
   }
 
   body {

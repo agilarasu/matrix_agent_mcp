@@ -55,12 +55,35 @@ class GroqChatAgent:
       {
         "type": "function",
         "function": {
-          "name": "fetch_url",
-          "description": "Fetch a URL and return its text content (HTML stripped). Use when user shares a link or asks about a webpage.",
+          "name": "search_files",
+          "description": "Search legal documentation files (buyers/sellers renting land with mineral rights) using a user query.",
           "parameters": {
             "type": "object",
-            "properties": {"url": {"type": "string", "description": "Full http/https URL to fetch."}},
-            "required": ["url"],
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Natural language phrase or partial file name to find relevant files.",
+              }
+            },
+            "required": ["query"],
+          },
+        },
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "add_task_to_a_file",
+          "description": "Stage or create a task for an existing legal file. Use confirmed=false to stage/show form; confirmed=true to create.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "file_id": {"type": "string"},
+              "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]},
+              "assigned_to": {"type": "string"},
+              "note": {"type": "string"},
+              "confirmed": {"type": "boolean"},
+            },
+            "required": ["file_id", "confirmed"],
           },
         },
       },
@@ -68,11 +91,22 @@ class GroqChatAgent:
 
   def _system_prompt(self) -> str:
     return (
-      "You are an AI assistant in a Matrix chat room. "
-      "When a user shares a URL or asks about a webpage, call fetch_url to retrieve its content, then summarize. "
-      "If you need the user to pick between options, call trigger_choice_selector — never ask for a typed choice when a selector fits. "
-      "While a choice selector is shown, the user cannot type; wait for the result before continuing. "
-      "Keep replies concise."
+      "You are a chat-widget assistant for legal documentation workflows focused on buyers and sellers "
+      "renting land that may contain mineral rights. "
+      "Primary use-case: add_task_to_a_file.\n"
+      "Rules:\n"
+      "1) Before adding a task, collect and confirm all fields: priority, assigned_to, and note.\n"
+      "2) Search candidate files with search_files before add_task_to_a_file.\n"
+      "3) If search_files returns multiple results, call trigger_choice_selector so user selects one file_id.\n"
+      "4) Only show non-file choice selectors after file_id is selected.\n"
+      "5) NEVER ask the user for priority in chat text.\n"
+      "6) Immediately stage a draft by calling add_task_to_a_file with confirmed=false (include known fields; leave unknown as empty).\n"
+      "7) The UI form handles edits for note, assigned_to, and priority. Priority is selected only in form.\n"
+      "8) When you receive a 'Task form submission:' user message, immediately call add_task_to_a_file with those exact values and confirmed=true.\n"
+      "9) If user cancels, do not call add_task_to_a_file.\n"
+      "10) Do not use choice selectors for priority or task confirmation.\n"
+      "11) While a choice selector is shown, wait for the choice result before continuing.\n"
+      "12) Keep responses short, practical, and action-oriented."
     )
 
   def build_messages(self, room_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -170,8 +204,69 @@ class GroqChatAgent:
             "messages": messages,
           }
 
-        if name == "fetch_url":
-          out = await self._call_mcp_tool("fetch_url", {"url": args["url"]})
+        if name == "add_task_to_a_file":
+          file_id = str(args.get("file_id", "") or "").strip()
+          if not file_id:
+            messages.append(
+              {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": json.dumps(
+                  {
+                    "ok": False,
+                    "error": "missing_file_id",
+                    "instruction": "Search/select file first, then continue task creation flow.",
+                  }
+                ),
+              }
+            )
+            continue
+
+          confirmed = bool(args.get("confirmed", False))
+          if not confirmed:
+            # Stage draft UI via tool-call event, then pause assistant output
+            # until user submits/cancels the task form.
+            return "assistant_text", {"messages": messages, "assistant": {"content": ""}}
+
+          note = str(args.get("note", "") or "").strip()
+          assigned_to = str(args.get("assigned_to", "") or "").strip()
+          priority = str(args.get("priority", "") or "").strip()
+          missing = []
+          if not note:
+            missing.append("note")
+          if not assigned_to:
+            missing.append("assigned_to")
+          if not priority:
+            missing.append("priority")
+          if missing:
+            messages.append(
+              {
+                "role": "tool",
+                "tool_call_id": tc["id"],
+                "content": json.dumps(
+                  {
+                    "ok": False,
+                    "error": "missing_fields",
+                    "missing_fields": missing,
+                    "instruction": "Collect missing values in task form and resubmit confirmed=true.",
+                  }
+                ),
+              }
+            )
+            continue
+
+          out = await self._call_mcp_tool(name, args)
+          messages.append(
+            {
+              "role": "tool",
+              "tool_call_id": tc["id"],
+              "content": json.dumps(out),
+            }
+          )
+          continue
+
+        if name == "search_files":
+          out = await self._call_mcp_tool(name, args)
           messages.append(
             {
               "role": "tool",

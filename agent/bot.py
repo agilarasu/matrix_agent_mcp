@@ -23,6 +23,7 @@ from groq_agent import GroqChatAgent, PendingChoice
 CHOICE_SELECTOR_TYPE = "com.poc.choice_selector"
 CHOICE_RESULT_TYPE = "com.poc.choice_result"
 TOOL_CALL_TYPE = "com.poc.tool_call"
+TASK_FORM_SUBMIT_TYPE = "com.poc.task_form_submit"
 
 
 def env(name: str, default: str | None = None) -> str:
@@ -47,6 +48,7 @@ class MatrixGroqBot:
     )
     self.client = AsyncClient(self.homeserver, self.user, config=cfg)
     self.agent = GroqChatAgent()
+    self.debug_messages = os.environ.get("DEBUG_BOT_MESSAGES", "0") == "1"
 
     self.history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=200))
     self.pending: dict[str, PendingChoice] = {}
@@ -65,6 +67,20 @@ class MatrixGroqBot:
         data = json.load(f)
       if not isinstance(data, dict):
         return
+
+      # If the bot was previously used against another homeserver, the persisted sync token
+      # will be invalid ("Invalid stream token") and cause a rapid error loop.
+      saved_hs = data.get("homeserver")
+      saved_user = data.get("user")
+      if (isinstance(saved_hs, str) and saved_hs and saved_hs != self.homeserver) or (
+        isinstance(saved_user, str) and saved_user and saved_user != self.user
+      ):
+        logging.warning(
+          "state file belongs to different account/homeserver; resetting sync token (saved_hs=%s saved_user=%s)",
+          saved_hs,
+          saved_user,
+        )
+        data.pop("sync_token", None)
 
       raw_history = data.get("history", {})
       if isinstance(raw_history, dict):
@@ -105,6 +121,8 @@ class MatrixGroqBot:
   def _save_state(self) -> None:
     try:
       state = {
+        "homeserver": self.homeserver,
+        "user": self.user,
         "history": {room_id: list(items) for room_id, items in self.history.items()},
         "pending": {
           room_id: {
@@ -147,6 +165,8 @@ class MatrixGroqBot:
     self._save_state()
 
   async def _send_text(self, room_id: str, body: str) -> None:
+    if self.debug_messages:
+      logging.info("send_text room=%s body=%r", room_id, body)
     await self.client.room_send(
       room_id,
       message_type="m.room.message",
@@ -184,6 +204,15 @@ class MatrixGroqBot:
     options: list[dict[str, str]],
     allow_multiple: bool,
   ) -> None:
+    if self.debug_messages:
+      logging.info(
+        "send_choice_selector room=%s request_id=%s allow_multiple=%s prompt=%r options=%s",
+        room_id,
+        request_id,
+        allow_multiple,
+        prompt,
+        [o.get("label") for o in options],
+      )
     await self.client.room_send(
       room_id,
       message_type=CHOICE_SELECTOR_TYPE,
@@ -258,7 +287,7 @@ class MatrixGroqBot:
   async def on_unknown(self, room: MatrixRoom, event: UnknownEvent) -> None:
     try:
       et = getattr(event, "type", None)
-      if et != CHOICE_RESULT_TYPE:
+      if et not in {CHOICE_RESULT_TYPE, TASK_FORM_SUBMIT_TYPE}:
         if os.environ.get("DEBUG_EVENTS") == "1":
           logging.info("unknown event room=%s type=%s", room.room_id, et)
         return
@@ -267,6 +296,36 @@ class MatrixGroqBot:
 
       content = event.source.get("content") if isinstance(event.source, dict) else None
       if not isinstance(content, dict):
+        return
+
+      if et == TASK_FORM_SUBMIT_TYPE:
+        file_id = content.get("file_id")
+        priority = content.get("priority")
+        assigned_to = content.get("assigned_to")
+        note = content.get("note")
+        confirmed = content.get("confirmed")
+        cancelled = content.get("cancelled")
+        submitted_by = content.get("submitted_by")
+        if (
+          not isinstance(file_id, str)
+          or not isinstance(priority, str)
+          or not isinstance(assigned_to, str)
+          or not isinstance(note, str)
+          or not isinstance(confirmed, bool)
+          or not isinstance(cancelled, bool)
+          or not isinstance(submitted_by, str)
+        ):
+          return
+
+        if cancelled:
+          self._hist_append_text(room.room_id, is_user=True, body="Task form submission cancelled by user.")
+        else:
+          synthesized = (
+            "Task form submission: "
+            f"file_id={file_id}; priority={priority}; assigned_to={assigned_to}; note={note}; confirmed={confirmed}"
+          )
+          self._hist_append_text(room.room_id, is_user=True, body=synthesized)
+        await self._respond_if_needed(room.room_id)
         return
 
       request_id = content.get("request_id")
@@ -353,7 +412,13 @@ class MatrixGroqBot:
       if isinstance(bootstrap, SyncResponse):
         self.sync_token = bootstrap.next_batch
         self._save_state()
-      logging.info("sync bootstrap token initialized=%s", bool(self.sync_token))
+        logging.info("sync bootstrap token initialized=%s", bool(self.sync_token))
+      else:
+        # Local test homeservers sometimes return an error object (no next_batch).
+        # Avoid a tight loop and surface what we got.
+        msg = getattr(bootstrap, "message", None) or getattr(bootstrap, "error", None) or str(bootstrap)
+        logging.error("sync bootstrap failed resp=%s msg=%s", type(bootstrap).__name__, msg)
+        await asyncio.sleep(2)
 
     self.client.add_event_callback(self.on_invite, InviteMemberEvent)
     self.client.add_event_callback(self.on_text, RoomMessageText)
@@ -366,6 +431,35 @@ class MatrixGroqBot:
         if isinstance(sync_resp, SyncResponse):
           self.sync_token = sync_resp.next_batch
           self._save_state()
+          continue
+
+        # When homeserver returns an error payload, nio may yield an error response object
+        # instead of raising. Without handling, this becomes a rapid retry loop.
+        msg = getattr(sync_resp, "message", None) or getattr(sync_resp, "error", None) or str(sync_resp)
+        status = getattr(sync_resp, "status_code", None)
+        errcode = getattr(sync_resp, "errcode", None)
+        logging.warning(
+          "sync non-success resp=%s status=%s errcode=%s msg=%s",
+          type(sync_resp).__name__,
+          status,
+          errcode,
+          msg,
+        )
+
+        # Common when switching homeservers (e.g. matrix.org -> localhost): the persisted since token is invalid.
+        if isinstance(msg, str) and "invalid stream token" in msg.lower():
+          logging.warning("resetting sync token and bootstrapping a fresh one")
+          self.sync_token = None
+          self._save_state()
+          bootstrap = await self.client.sync(timeout=0, full_state=False)
+          if isinstance(bootstrap, SyncResponse):
+            self.sync_token = bootstrap.next_batch
+            self._save_state()
+            continue
+          msg2 = getattr(bootstrap, "message", None) or getattr(bootstrap, "error", None) or str(bootstrap)
+          logging.error("sync re-bootstrap failed resp=%s msg=%s", type(bootstrap).__name__, msg2)
+
+        await asyncio.sleep(2)
       except asyncio.CancelledError:
         raise
       except Exception:
