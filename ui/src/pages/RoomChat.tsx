@@ -380,6 +380,8 @@ export function RoomChatPage() {
               if (toolName === "search_files") {
                 const query =
                   typeof e.content.arguments?.query === "string" ? e.content.arguments.query.trim() : "";
+                const owner =
+                  typeof e.content.arguments?.owner === "string" ? e.content.arguments.owner.trim() : "";
                 return (
                   <div
                     key={e.event.getId() ?? `${eventTs(e.event)}:${sender}`}
@@ -394,6 +396,34 @@ export function RoomChatPage() {
                         </>
                       ) : (
                         "Query: (empty)"
+                      )}
+                      {owner ? (
+                        <div className="mt-1 text-xs text-slate-600">
+                          Owner: <span className="font-medium">{owner}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              }
+
+              if (toolName === "show_tasks") {
+                const fileId =
+                  typeof e.content.arguments?.file_id === "string" ? e.content.arguments.file_id.trim() : "";
+                return (
+                  <div
+                    key={e.event.getId() ?? `${eventTs(e.event)}:${sender}`}
+                    className="w-full max-w-[85%] rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <div className="mb-1 font-medium text-slate-600">Fetching tasks</div>
+                    <div className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700">
+                      {fileId ? (
+                        <>
+                          File: <span className="font-mono font-medium">{fileId}</span>
+                        </>
+                      ) : (
+                        "File: (all files)"
                       )}
                     </div>
                   </div>

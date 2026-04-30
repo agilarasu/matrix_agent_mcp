@@ -168,6 +168,43 @@ async def add_task_to_a_file(
   }
 
 
+@mcp.tool()
+async def show_tasks(file_id: str | None = None) -> dict[str, Any]:
+  """Show tasks for one legal file or all files.
+
+  Args:
+    file_id: Optional file identifier. If omitted, returns tasks for all files.
+  """
+  file_id_q = (file_id or "").strip() or None
+
+  if file_id_q:
+    file_obj = next((f for f in LEGAL_FILES if f["id"] == file_id_q), None)
+    if file_obj is None:
+      return {"ok": False, "error": "file_not_found", "message": f"Unknown file_id '{file_id_q}'."}
+
+    tasks = FILE_TASKS.get(file_id_q, [])
+    return {
+      "ok": True,
+      "file": file_obj,
+      "total_tasks_for_file": len(tasks),
+      "tasks": tasks,
+    }
+
+  results: list[dict[str, Any]] = []
+  total_tasks = 0
+  for f in LEGAL_FILES:
+    tasks = FILE_TASKS.get(f["id"], [])
+    total_tasks += len(tasks)
+    results.append({"file": f, "total_tasks_for_file": len(tasks), "tasks": tasks})
+
+  return {
+    "ok": True,
+    "total_files": len(LEGAL_FILES),
+    "total_tasks": total_tasks,
+    "results": results,
+  }
+
+
 def main() -> None:
   mcp.run(transport="streamable-http")
 

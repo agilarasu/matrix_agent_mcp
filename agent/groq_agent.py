@@ -56,16 +56,35 @@ class GroqChatAgent:
         "type": "function",
         "function": {
           "name": "search_files",
-          "description": "Search legal documentation files (buyers/sellers renting land with mineral rights) using a user query.",
+          "description": "Search legal documentation files (buyers/sellers renting land with mineral rights). Supports free-text query and optional owner filter.",
           "parameters": {
             "type": "object",
             "properties": {
               "query": {
                 "type": "string",
                 "description": "Natural language phrase or partial file name to find relevant files.",
+              },
+              "owner": {
+                "type": "string",
+                "description": "Optional owner filter (buyer, seller, both).",
               }
             },
-            "required": ["query"],
+          },
+        },
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "show_tasks",
+          "description": "Show tasks for one file_id or all files.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "file_id": {
+                "type": "string",
+                "description": "Optional file identifier. If omitted, return tasks for all files.",
+              }
+            },
           },
         },
       },
@@ -107,6 +126,8 @@ class GroqChatAgent:
       "10) Do not use choice selectors for priority or task confirmation.\n"
       "11) While a choice selector is shown, wait for the choice result before continuing.\n"
       "12) Keep responses short, practical, and action-oriented."
+      "13) If the user asks like 'show me John's files', you should call search_files with the query 'John', and in 'Assigned to' field, you should put 'John'"
+      "14) If the user asks to show tasks, call show_tasks (optionally with file_id if user specifies a file)."
     )
 
   def build_messages(self, room_history: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -266,6 +287,17 @@ class GroqChatAgent:
           continue
 
         if name == "search_files":
+          out = await self._call_mcp_tool(name, args)
+          messages.append(
+            {
+              "role": "tool",
+              "tool_call_id": tc["id"],
+              "content": json.dumps(out),
+            }
+          )
+          continue
+
+        if name == "show_tasks":
           out = await self._call_mcp_tool(name, args)
           messages.append(
             {
